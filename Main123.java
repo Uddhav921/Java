@@ -1,27 +1,38 @@
 package jdbc;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 
+// Class for user authentication
 class Authentication {
-    private static final String DB_URL = "jdbc:postgresql://localhost:5432/postgres";
+    private static final String DB_URL = "jdbc:postgresql://localhost:5432/library_db";
     private static final String DB_USER = "postgres";
     private static final String DB_PASSWORD = "uddhav taur7777";
 
-    public static boolean checkUsername(String username) {
+    public static boolean registerUser(String username, String password, String email) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "SELECT * FROM users WHERE username = ?";
-            PreparedStatement statement = connection.prepareStatement(query);
-            statement.setString(1, username);
-            ResultSet resultSet = statement.executeQuery();
-            return resultSet.next();
+            String checkQuery = "SELECT * FROM user15 WHERE username = ?";
+            PreparedStatement checkStatement = connection.prepareStatement(checkQuery);
+            checkStatement.setString(1, username);
+            ResultSet resultSet = checkStatement.executeQuery();
+
+            if (resultSet.next()) {
+                return false; // Username already exists
+            }
+
+            String insertQuery = "INSERT INTO user15 (username, password, email) VALUES (?, ?, ?)";
+            PreparedStatement insertStatement = connection.prepareStatement(insertQuery);
+            insertStatement.setString(1, username);
+            insertStatement.setString(2, password);
+            insertStatement.setString(3, email);
+            insertStatement.executeUpdate();
+            return true;
+
         } catch (SQLException e) {
             e.printStackTrace();
             return false;
@@ -30,7 +41,7 @@ class Authentication {
 
     public static boolean authenticate(String username, String password) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "SELECT * FROM users WHERE username = ? AND password = ?";
+            String query = "SELECT * FROM user15 WHERE username = ? AND password = ?";
             PreparedStatement statement = connection.prepareStatement(query);
             statement.setString(1, username);
             statement.setString(2, password);
@@ -44,7 +55,7 @@ class Authentication {
 
     public static int getUserId(String username) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "SELECT id FROM users WHERE username = ?";
+            String query = "SELECT id FROM user15 WHERE username = ?";
             PreparedStatement statement = connection.prepareStatement(query);
             statement.setString(1, username);
             ResultSet resultSet = statement.executeQuery();
@@ -54,31 +65,40 @@ class Authentication {
         } catch (SQLException e) {
             e.printStackTrace();
         }
-        return -1; // Return -1 if user ID not found
+        return -1;
+    }
+
+    public static int getUserBorrowedCount(int userId) {
+        try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            String query = "SELECT COUNT(*) AS borrowed_count FROM borrowings WHERE user_id = ? AND return_date IS NULL AND borrow_date >= CURRENT_DATE - INTERVAL '15 days'";
+            PreparedStatement statement = connection.prepareStatement(query);
+            statement.setInt(1, userId);
+            ResultSet resultSet = statement.executeQuery();
+            if (resultSet.next()) {
+                return resultSet.getInt("borrowed_count");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return -1;
     }
 }
 
-class Book1 {
-    private static final String DB_URL = "jdbc:postgresql://localhost:5432/postgres";
+// Class for book operations
+class Book {
+    private static final String DB_URL = "jdbc:postgresql://localhost:5432/library_db";
     private static final String DB_USER = "postgres";
     private static final String DB_PASSWORD = "uddhav taur7777";
-    private int bookChoice;
-    private int fine;
-    private int fineDays;
-    private int extra_fine;
-    private int bookCondition;
-    private int issueDate, issueMonth, issueYear;
-    private int returnDate, returnMonth, returnYear;
 
     public void displayBooks(JComboBox<String> bookComboBox) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "SELECT id, name FROM book9";
+            String query = "SELECT id, title FROM books15 WHERE quantity > 0";
             PreparedStatement statement = connection.prepareStatement(query);
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {
                 int id = resultSet.getInt("id");
-                String name = resultSet.getString("name");
-                String item = id + " " + name;
+                String title = resultSet.getString("title");
+                String item = id + " - " + title;
                 bookComboBox.addItem(item);
             }
         } catch (SQLException e) {
@@ -86,248 +106,283 @@ class Book1 {
         }
     }
 
-    public void borrowBook(int userId, int bookChoice) {
-        this.bookChoice = bookChoice;
+    public String borrowBook(int userId, int bookId, String username) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "SELECT quantity FROM book9 WHERE id = ?";
-            PreparedStatement checkStatement = connection.prepareStatement(query);
-            checkStatement.setInt(1, bookChoice);
+            int borrowedCount = Authentication.getUserBorrowedCount(userId);
+            if (borrowedCount >= 3) {
+                return "You have already borrowed 3 books within the last 15 days. Please return a book before borrowing another.";
+            }
+
+            String checkQuery = "SELECT quantity FROM books15 WHERE id = ?";
+            PreparedStatement checkStatement = connection.prepareStatement(checkQuery);
+            checkStatement.setInt(1, bookId);
             ResultSet resultSet = checkStatement.executeQuery();
-            if (resultSet.next()) {
-                int quantity = resultSet.getInt("quantity");
-                if (quantity > 0) {
-                    String updateQuery = "UPDATE book9 SET quantity = quantity - 1 WHERE id = ?";
-                    PreparedStatement statement = connection.prepareStatement(updateQuery);
-                    statement.setInt(1, bookChoice);
-                    int rowsAffected = statement.executeUpdate();
-                    if (rowsAffected == 0) {
-                        JOptionPane.showMessageDialog(null, "Book borrowing failed. Book not found.");
-                    } else {
-                        JOptionPane.showMessageDialog(null, "You have borrowed the book.");
-                        storeBorrowInfo(connection, userId);
-                    }
-                } else {
-                    JOptionPane.showMessageDialog(null, "Book borrowing failed. Book not available.");
-                }
+
+            if (resultSet.next() && resultSet.getInt("quantity") > 0) {
+                // Update book quantity
+                String updateQuery = "UPDATE books15 SET quantity = quantity - 1 WHERE id = ?";
+                PreparedStatement updateStatement = connection.prepareStatement(updateQuery);
+                updateStatement.setInt(1, bookId);
+                updateStatement.executeUpdate();
+
+                // Record the borrowing
+                String borrowQuery = "INSERT INTO borrowings (user_id, book_id, borrow_date) VALUES (?, ?, CURRENT_DATE)";
+                PreparedStatement borrowStatement = connection.prepareStatement(borrowQuery);
+                borrowStatement.setInt(1, userId);
+                borrowStatement.setInt(2, bookId);
+                borrowStatement.executeUpdate();
+
+                return username + " Borrowed The book Successfully on " + LocalDate.now();
             } else {
-                JOptionPane.showMessageDialog(null, "Book borrowing failed. Book not found.");
+                return "Book is not available for borrowing.";
             }
         } catch (SQLException e) {
             e.printStackTrace();
+            return "An error occurred while borrowing the book.";
         }
     }
 
-    public void returnBook(int userId, int bookChoice) {
-        this.bookChoice = bookChoice;
+    public String returnBook(int userId, int bookId, String username) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String query = "UPDATE book9 SET quantity = quantity + 1 WHERE id = ?";
-            PreparedStatement statement = connection.prepareStatement(query);
-            statement.setInt(1, bookChoice);
-            int rowsAffected = statement.executeUpdate();
-            if (rowsAffected == 0) {
-                JOptionPane.showMessageDialog(null, "Book returning failed. Book not found.");
+            String checkQuery = "SELECT borrow_date FROM borrowings WHERE user_id = ? AND book_id = ? AND return_date IS NULL";
+            PreparedStatement checkStatement = connection.prepareStatement(checkQuery);
+            checkStatement.setInt(1, userId);
+            checkStatement.setInt(2, bookId);
+            ResultSet resultSet = checkStatement.executeQuery();
+
+            if (resultSet.next()) {
+                LocalDate borrowDate = resultSet.getDate("borrow_date").toLocalDate();
+                LocalDate returnDate = LocalDate.now();
+                long daysOverdue = ChronoUnit.DAYS.between(borrowDate.plusDays(7), returnDate);
+                int fine = daysOverdue > 0 ? (int) (daysOverdue * 5) : 0;
+
+                // Update book quantity
+                String updateQuery = "UPDATE books15 SET quantity = quantity + 1 WHERE id = ?";
+                PreparedStatement updateStatement = connection.prepareStatement(updateQuery);
+                updateStatement.setInt(1, bookId);
+                updateStatement.executeUpdate();
+
+                // Record the return
+                String returnQuery = "UPDATE borrowings SET return_date = CURRENT_DATE, fine = ? WHERE user_id = ? AND book_id = ? AND return_date IS NULL";
+                PreparedStatement returnStatement = connection.prepareStatement(returnQuery);
+                returnStatement.setInt(1, fine);
+                returnStatement.setInt(2, userId);
+                returnStatement.setInt(3, bookId);
+                returnStatement.executeUpdate();
+
+                return username + " Returned The Book Successfully on " + returnDate + ". Fine: " + fine +" Ruppes";
             } else {
-                JOptionPane.showMessageDialog(null, "Book is successfully returned.");
-                storeReturnInfo(connection, userId, fine);
+                return "No record found of you borrowing this book.";
             }
         } catch (SQLException e) {
             e.printStackTrace();
+            return "An error occurred while returning the book.";
         }
     }
 
-    public void checkBook() {
-        String input = JOptionPane.showInputDialog("Book is in good condition if less than 1 & bad if greater than 1:");
-        bookCondition = Integer.parseInt(input);
-        if (bookCondition <= 1) {
-            JOptionPane.showMessageDialog(null, "Good Condition");
-        } else {
-            input = JOptionPane.showInputDialog("Book cannot be returned due to bad condition book will charge the extra fine:\nEnter the extra fine:");
-            extra_fine = Integer.parseInt(input);
-            fine = extra_fine + fineDays * 5;
-            JOptionPane.showMessageDialog(null, "Your total fine including original fine + extra fine = " + fine);
-        }
-    }
-
-    public void dateOfIssue() {
-        String input = JOptionPane.showInputDialog("Enter issue date (dd mm yyyy):");
-        String[] dateParts = input.split(" ");
-        issueDate = Integer.parseInt(dateParts[0]);
-        issueMonth = Integer.parseInt(dateParts[1]);
-        issueYear = Integer.parseInt(dateParts[2]);
-        if (issueDate > 31 || issueMonth > 12) {
-            JOptionPane.showMessageDialog(null, "Please enter correct date");
-        }
-    }
-
-    public void dateOfReturn() {
-        String input = JOptionPane.showInputDialog("Enter return date (dd mm yyyy):");
-        String[] dateParts = input.split(" ");
-        returnDate = Integer.parseInt(dateParts[0]);
-        returnMonth = Integer.parseInt(dateParts[1]);
-        returnYear = Integer.parseInt(dateParts[2]);
-        if (returnDate > 31 || returnMonth > 12) {
-            JOptionPane.showMessageDialog(null, "Please enter correct date");
-        }
-    }
-
-    public void checkFine() {
-        if (returnDate - issueDate <= 7) {
-            JOptionPane.showMessageDialog(null, "No fine.");
-            fineDays = 0;
-        } else {
-            fineDays = returnDate - issueDate - 7;
-            fine = fineDays * 5;
-            JOptionPane.showMessageDialog(null, "Your fine is " + fine + " RS");
-        }
-    }
-
-    private void storeBorrowInfo(Connection connection, int userId) {
-        try {
-            String query = "INSERT INTO borrow_history1 (user_id, book_id, borrow_date) VALUES (?, ?, CURRENT_DATE)";
+    public void displayUserHistory(int userId, JTextArea historyArea) {
+        try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            String query = "SELECT b.title, br.borrow_date, br.return_date, br.fine FROM borrowings br JOIN books15 b ON br.book_id = b.id WHERE br.user_id = ?";
             PreparedStatement statement = connection.prepareStatement(query);
             statement.setInt(1, userId);
-            statement.setInt(2, bookChoice);
-            statement.executeUpdate();
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
-    }
+            ResultSet resultSet = statement.executeQuery();
 
-    private void storeReturnInfo(Connection connection, int userId, int fine) {
-        try {
-            String query = "UPDATE borrow_history1 SET return_date = CURRENT_DATE, fine = ? WHERE user_id = ? AND book_id = ?";
-            PreparedStatement statement = connection.prepareStatement(query);
-            statement.setInt(1, fine);
-            statement.setInt(2, userId);
-            statement.setInt(3, bookChoice);
-            statement.executeUpdate();
+            StringBuilder historyBuilder = new StringBuilder();
+            while (resultSet.next()) {
+                String title = resultSet.getString("title");
+                LocalDate borrowDate = resultSet.getDate("borrow_date").toLocalDate();
+                String returnDate = resultSet.getDate("return_date") != null ? resultSet.getDate("return_date").toString() : "Not Returned";
+                int fine = resultSet.getInt("fine");
+
+                historyBuilder.append("Title: ").append(title)
+                        .append(", Borrowed: ").append(borrowDate)
+                        .append(", Returned: ").append(returnDate)
+                        .append(", Fine: Ruppes=").append(fine).append("\n");
+            }
+            historyArea.setText(historyBuilder.toString());
         } catch (SQLException e) {
             e.printStackTrace();
         }
     }
 }
 
-public class Main123 {
-    public static void main(String[] args) {
-        // Create JFrame for login
-        JFrame loginFrame = new JFrame("Library Management System - Login");
-        loginFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        loginFrame.setSize(400, 300);
-        loginFrame.setLayout(new GridBagLayout());
+// Class for the User Interface
+class LibraryManagementSystemUI extends JFrame {
+    private JTextField usernameField;
+    private JPasswordField passwordField;
+    private JTextField emailField;
+    private JComboBox<String> bookComboBox;
+    private JTextArea historyArea;
+    private JButton loginButton;
+    private JButton registerButton;
+    private JButton borrowButton;
+    private JButton returnButton;
+    private JButton logoutButton;
 
-        // Create components for login
+    private String loggedInUser;
+    private int loggedInUserId;
+
+    public LibraryManagementSystemUI() {
+        setTitle("Library Book Issue Management System");
+        setSize(800, 600);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        // Center Panel for login/registration
+        JPanel centerPanel = new JPanel(new GridLayout(4, 2, 10, 10));
+        centerPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+
         JLabel usernameLabel = new JLabel("Username:");
-        JTextField usernameField = new JTextField(15);
+        usernameField = new JTextField(20);
         JLabel passwordLabel = new JLabel("Password:");
-        JPasswordField passwordField = new JPasswordField(15);
-        JButton loginButton = new JButton("Login");
+        passwordField = new JPasswordField(20);
+        JLabel emailLabel = new JLabel("Email:");
+        emailField = new JTextField(20);
 
-        // Add components to the frame
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(10, 10, 10, 10);
+        loginButton = new JButton("Login");
+        registerButton = new JButton("Register");
 
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        loginFrame.add(usernameLabel, gbc);
+        centerPanel.add(usernameLabel);
+        centerPanel.add(usernameField);
+        centerPanel.add(passwordLabel);
+        centerPanel.add(passwordField);
+        centerPanel.add(emailLabel);
+        centerPanel.add(emailField);
+        centerPanel.add(loginButton);
+        centerPanel.add(registerButton);
 
-        gbc.gridx = 1;
-        gbc.gridy = 0;
-        loginFrame.add(usernameField, gbc);
+        // Main Panel
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        mainPanel.add(centerPanel, BorderLayout.CENTER);
 
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        loginFrame.add(passwordLabel, gbc);
+        // Right panel for books and operations
+        JPanel rightPanel = new JPanel(new BorderLayout());
+        JLabel bookLabel = new JLabel("Available Books:");
+        bookComboBox = new JComboBox<>();
+        bookComboBox.setPreferredSize(new Dimension(250, 30));
 
-        gbc.gridx = 1;
-        gbc.gridy = 1;
-        loginFrame.add(passwordField, gbc);
+        JPanel buttonPanel = new JPanel(new GridLayout(2, 1, 10, 10));
+        borrowButton = new JButton("Borrow Book");
+        returnButton = new JButton("Return Book");
+        buttonPanel.add(borrowButton);
+        buttonPanel.add(returnButton);
 
-        gbc.gridx = 1;
-        gbc.gridy = 2;
-        loginFrame.add(loginButton, gbc);
+        rightPanel.add(bookLabel, BorderLayout.NORTH);
+        rightPanel.add(bookComboBox, BorderLayout.CENTER);
+        rightPanel.add(buttonPanel, BorderLayout.SOUTH);
 
-        // Set frame visibility
-        loginFrame.setVisible(true);
+        mainPanel.add(rightPanel, BorderLayout.EAST);
 
-        // Add ActionListener to login button
-        loginButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                String username = usernameField.getText();
-                String password = new String(passwordField.getPassword());
+        // History area
+        historyArea = new JTextArea();
+        historyArea.setEditable(false);
+        JScrollPane historyScrollPane = new JScrollPane(historyArea);
+        mainPanel.add(historyScrollPane, BorderLayout.SOUTH);
 
-                // Authentication logic
-                if (Authentication.checkUsername(username) && Authentication.authenticate(username, password)) {
-                    JOptionPane.showMessageDialog(loginFrame, "Login successful!");
+        // Adding main panel to frame
+        add(mainPanel, BorderLayout.CENTER);
 
-                    // Proceed to the book library
-                    loginFrame.dispose();  // Close the login frame
-                    openLibraryInterface(username);  // Open library interface
-                } else {
-                    JOptionPane.showMessageDialog(loginFrame, "Invalid username or password.", "Login Error", JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        });
+        // Logout button
+        logoutButton = new JButton("Logout");
+        JPanel topPanel = new JPanel(new BorderLayout());
+        topPanel.add(logoutButton, BorderLayout.EAST);
+        add(topPanel, BorderLayout.NORTH);
+
+        // Action Listeners
+        loginButton.addActionListener(new LoginActionListener());
+        registerButton.addActionListener(new RegisterActionListener());
+        borrowButton.addActionListener(new BorrowActionListener());
+        returnButton.addActionListener(new ReturnActionListener());
+        logoutButton.addActionListener(new LogoutActionListener());
+
+        setLocationRelativeTo(null);
     }
 
-    private static void openLibraryInterface(String username) {
-        int userId = Authentication.getUserId(username);
+    private class LoginActionListener implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            String username = usernameField.getText();
+            String password = new String(passwordField.getPassword());
 
-        // Create a new frame for the library interface
-        JFrame libraryFrame = new JFrame("Library Interface");
-        libraryFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        libraryFrame.setSize(500, 400);
-        libraryFrame.setLayout(new FlowLayout());
+            if (Authentication.authenticate(username, password)) {
+                loggedInUser = username;
+                loggedInUserId = Authentication.getUserId(username);
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Login Successful!");
 
-        // Create components for the library interface
-        JLabel bookLabel = new JLabel("Select a book:");
-        JComboBox<String> bookComboBox = new JComboBox<>();
-        JButton borrowButton = new JButton("Borrow");
-        JButton returnButton = new JButton("Return");
+                // Load available books
+                new Book().displayBooks(bookComboBox);
 
-        // Add components to the library frame
-        libraryFrame.add(bookLabel);
-        libraryFrame.add(bookComboBox);
-        libraryFrame.add(borrowButton);
-        libraryFrame.add(returnButton);
+                // Load user history
+                new Book().displayUserHistory(loggedInUserId, historyArea);
 
-        // Populate books into the JComboBox
-        Book1 library = new Book1();
-        library.displayBooks(bookComboBox);
-
-        // Set frame visibility
-        libraryFrame.setVisible(true);
-
-        // Add ActionListeners for borrow and return buttons
-        borrowButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                int selectedIndex = bookComboBox.getSelectedIndex();
-                if (selectedIndex >= 0) {
-                    // Book IDs are 1-based, so add 1 to selected index
-                    library.borrowBook(userId, selectedIndex + 1);
-                } else {
-                    JOptionPane.showMessageDialog(libraryFrame, "Please select a book.");
-                }
+            } else {
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Invalid username or password!");
             }
-        });
+        }
+    }
 
-        returnButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                library.dateOfIssue();
-                library.dateOfReturn();
-                library.checkFine();
-                library.checkBook();
-                int selectedIndex = bookComboBox.getSelectedIndex();
-                if (selectedIndex >= 0) {
-                    // Book IDs are 1-based, so add 1 to selected index
-                    library.returnBook(userId, selectedIndex + 1);
-                } else {
-                    JOptionPane.showMessageDialog(libraryFrame, "Please select a book.");
-                }
+    private class RegisterActionListener implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            String username = usernameField.getText();
+            String password = new String(passwordField.getPassword());
+            String email = emailField.getText();
+
+            if (Authentication.registerUser(username, password, email)) {
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Registration Successful!");
+            } else {
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Username already exists.");
             }
-        });
+        }
+    }
+
+    private class BorrowActionListener implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            if (loggedInUserId > 0 && bookComboBox.getSelectedItem() != null) {
+                String selectedItem = (String) bookComboBox.getSelectedItem();
+                int bookId = Integer.parseInt(selectedItem.split(" - ")[0]);
+                String result = new Book().borrowBook(loggedInUserId, bookId, loggedInUser);
+
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "<html><h2 style='font-size:16px'>" + result + "</h2></html>");
+
+                // Update user history
+                new Book().displayUserHistory(loggedInUserId, historyArea);
+            } else {
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Please login and select a book.");
+            }
+        }
+    }
+
+    private class ReturnActionListener implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            if (loggedInUserId > 0 && bookComboBox.getSelectedItem() != null) {
+                String selectedItem = (String) bookComboBox.getSelectedItem();
+                int bookId = Integer.parseInt(selectedItem.split(" - ")[0]);
+                String result = new Book().returnBook(loggedInUserId, bookId, loggedInUser);
+
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "<html><h2 style='font-size:16px'>" + result + "</h2></html>");
+
+                // Update user history
+                new Book().displayUserHistory(loggedInUserId, historyArea);
+            } else {
+                JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Please login and select a book.");
+            }
+        }
+    }
+
+    private class LogoutActionListener implements ActionListener {
+        public void actionPerformed(ActionEvent e) {
+            JOptionPane.showMessageDialog(LibraryManagementSystemUI.this, "Thanks for Visiting!");
+            dispose();
+        }
     }
 }
 
+// Main class to run the application
+ class LibraryManagementSystem {
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            LibraryManagementSystemUI libraryUI = new LibraryManagementSystemUI();
+            libraryUI.setVisible(true);
+        });
+    }
+}
